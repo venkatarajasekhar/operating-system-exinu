@@ -1,0 +1,44 @@
+/**
+* @Report for HW #5
+* @Author: Sisong Yang(yangsis) && Lei Wang(wang558)
+*
+*/
+
+------------------Implementation & Lessons---------------------
+
+In this assignment, we are asked to enable both FUTURE_SHARED and FUTURE_QUEUE, besides FUTURE_EXCLUSIVE, 
+which was implemented in HW4.  Both FUTURE_SHARED part and FUTURE_QUEUE part require a data structure, queue.
+And I chose to use the queue implemented by default, so that I don't need to wirte a queue from scratch. 
+
+In FUTURE_SHARED mode,
+there is one-to-many relationship between thread calling future_set() and future_get().  That's to say, just one
+thread can call future_Set(), any subsequence cals to it should return SYSERR.  Many threads can call future_get()
+only when the future state is VALID.  If the future is not valid, say either empty or waiting, we enque the thread
+into the get_queue and aware them when the future state is set to VALID.
+
+In FUTURE_QUEUE mode,
+it's a little complicated, many threads can call set and get. If a thread is calling future_set and there are threads
+ waiting for value in get_queue then thread calling future_set 
+should set the value and resume only one thread from get_queue based on first come first serve basis. 
+If there is no thread waiting in get_queue then thread calling future_set should enqueue itself in set_queue.
+
+
+If a thread is calling future_get and there are threads waiting to set value in set_queue then thread should release 
+only one thread from set_queue and should get the value set by thread just released from set_queue. 
+If there is no thread waiting in set_queue to set the value then thread calling future_get should enqueue itself in get_queue.
+
+
+The difference between this project and HW4 is that when allocating memory for future, in HW4, we assign FUTURE_EXCLUSIVE to
+future_flag by default, however, in HW5, this no longer works.  We should create future with its own flag.
+
+------------------FUNCTIONS PART-------------------------------
+future_set    by Sisong
+future_alloc  by Sisong
+future_prod   by Sisong
+future_cons   by Lei
+future_free   by Lei
+future_get    by Lei
+xsh_prodcons  by Lei && Sisong
+
+-------------------Details-------------------------------------------
+

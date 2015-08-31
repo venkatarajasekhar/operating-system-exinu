@@ -1,0 +1,94 @@
+/**
+* @Report for HW #4
+* @Author: Sisong Yang(yangsis) && Lei Wang(wang558)
+*
+*/
+
+-----------------------Implementation--------------------------
+
+The future_alloc() call will support only one flag i.e. FUTURE_EXLUSIVE. In this mode there is a one to one relationship between a thread calling future_get() and future_set(). Futures will be initialized in FUTURE_EMPTY state. If a thread calls future_get() on future in FUTURE_EMPTY, then the calling thread should block and its thread id should get stored in the tid field of the future. Now subsequent calls to future_get() on a future should fail with SYSERR. If a thread calls future_set() on a future in the FUTURE_EMPTY state, then the value provided bythe future_set() call should get stored in the value field of the future and its state should change from FUTURE_WAITING to FUTURE_VALID. Then subsequent calls to future_set() for the same future should fail.
+
+Actually this future just allows the flag FUTURE_EXCLUSIVE, that is just one thread can set and one thread can get.
+
+You can find the corresponding codes in our exinu folder
+
+------------------FUNCTIONS PART-------------------------------
+future_set    by Sisong
+future_alloc  by Sisong
+future_prod   by Sisong
+future_cons   by Lei
+future_free   by Lei
+future_get    by Lei
+xsh_prodcons  by Lei && Sisong
+
+--------------------Details----------------------------------------
+
+------------future.h------------
+#ifndef _FUTURE_H_
+#define _FUTURE_H_
+ 
+/* define states */
+#define FUTURE_EMPTY	  0
+#define FUTURE_WAITING 	  1         
+#define FUTURE_VALID 	  2         
+
+/* modes of operation for future*/
+#define FUTURE_EXCLUSIVE  1	
+
+typedef struct futent
+{
+   int *value;		
+   int flag;		
+   int state;         	
+   tid_typ tid;
+} future;
+
+/* Interface for system call */
+future* future_alloc(int future_flags);
+syscall future_free(future*);
+syscall future_get(future*, int*);
+syscall future_set(future*, int*);
+ 
+#endif /* _FUTURE_H_ */
+
+
+-----------xsh_prodcons.c---------------------------------------
+This part is to append the file 
+
+future *f1, *f2, *f3;
+ 
+  f1 = future_alloc(FUTURE_EXCLUSIVE);
+  f2 = future_alloc(FUTURE_EXCLUSIVE);
+  f3 = future_alloc(FUTURE_EXCLUSIVE);
+ 
+  resume( create(future_cons, 1024, 20, "fcons1", 1, f1) );
+  resume( create(future_prod, 1024, 20, "fprod1", 1, f1) );
+  resume( create(future_cons, 1024, 20, "fcons2", 1, f2) );
+  resume( create(future_prod, 1024, 20, "fprod2", 1, f2) );
+  resume( create(future_cons, 1024, 20, "fcons3", 1, f3) );
+  resume( create(future_prod, 1024, 20, "fprod3", 1, f3) );
+
+------------------------future_prod.c-------------------
+
+uint future_prod(future *fut) {
+  int i, j;
+  j = (int)fut;
+  for (i=0; i<1000; i++) {
+    j += i;
+  }
+  future_set(fut, &j);
+  return OK;
+}
+
+------------------------future_cons.c---------------------
+uint future_cons(future *fut) {
+
+  int i, status;
+  status = future_get(fut, &i);
+  if (status < 1) {
+    printf("future_get failed\n");
+    return -1;
+  }
+  printf("it produced %d\n", i);
+  return OK;
+}

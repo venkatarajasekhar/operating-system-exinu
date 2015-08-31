@@ -1,0 +1,28 @@
+/**
+* @Report
+* @Author: Lei Wang(wang558) && Sisong Yang(yangsis)
+*
+*/
+
+----------------------ANSWER PART-------------------------------
+
+Question_1: Does your program output any garbage? if yes, why?
+
+Answer to #1:
+
+It does output garbage. Both consumer and producer process must format and write a line of output since they both have the "output" part within their own code. The outputs of producer and consumer are interleaved with each other becuase the CPU is allocated to the other process after a given time during which the first process has NOT completed the "output" part.
+
+Question_2: Are all the produced values getting consumed? Check your program for a small count like 20.
+
+Answer to #2:
+
+From the final outputs of our program, we cna tell that NOT all the produced values getting consumed.
+
+
+------------------FUNCTIONS PART-------------------------------
+consumer by Sisong
+prodcons.h by Sisong
+producer by Lei
+number_only by Lei
+xsh_prodcons  by Lei
+

@@ -1,0 +1,524 @@
+/**
+* @Report for HW #6
+* @Author: Sisong Yang(yangsis) && Lei Wang(wang558)
+*
+*/
+
+----------------------Description of Implementation && Lessons------------
+We implemented 6 functions, that is fopen(), fclose(), fcreate(), fseek(), fread(), fwrite().
+
+Actually, in this project, we are asked to simulate a real file system, but carried out in memory. we use 
+
+fopen() function to open a file using its filename and its open method; 
+fclose() function to close a file using its unique file descriptor;
+fcreate() function to create a file and assigns it a name, and its creating mode;
+fseek() function actually deals with the pointer to text within a file, it can move forward until to the end of the file, or move back until the start of the file;
+fread() function to first open a file specified by its file descriptor, and then read a block of length nbytes, and assign it to the block of size.
+fwrite() function to first open a file specified by its file descriptor, and then write a block of characters contained in buffer, to the file
+
+
+From the project, the lesson is that we cannot pay too much attention to coding, especially when it comes to the logic behind the coding work. 
+We can actually reuse several codes to assist other functions, and you know, when we are dealing with fread() and fwrite(), we need to use the function fseek() to move the pointer forth and back. 
+
+Also, we need to update the corresponding xinu.conf file and Makefule files in order to succeed coding.
+
+------------------FUNCTIONS PART-------------------------------
+fs.h          by Sisong
+xsh_fstest    by Lei
+fs.c bs.c     by Lei && Sisong
+debug         by Sisong && Lei
+------------------Details of codes------------------------------
+--------fs.c------------------
+
+
+#include <kernel.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+#include <bufpool.h>
+
+#if FS
+#include <fs.h>
+
+static struct fsystem fsd;
+int dev0_numblocks;
+int dev0_blocksize;
+char *dev0_blocks;
+int dev0 = 0;
+
+#define NUM_FD 16
+struct filetable oft[NUM_FD*2];
+int next_open_fd = 0;
+
+#define SB_BLK 0
+#define BM_BLK 1
+#define RT_BLK 2
+
+
+#define INODES_PER_BLOCK (fsd.blocksz / sizeof(struct inode))
+#define NUM_INODE_BLOCKS (( (fsd.ninodes % INODES_PER_BLOCK) == 0) ? fsd.ninodes / INODES_PER_BLOCK : (fsd.ninodes / INODES_PER_BLOCK) + 1)
+#define FIRST_INODE_BLOCK 2
+
+int fileblock_to_diskblock(int dev, int fd, int fileblock);
+
+int mkfs(int dev, int num_inodes) {
+  int i;
+  int bm_blk = 0;
+  
+  if (dev == 0) {
+    fsd.nblocks = dev0_numblocks;
+    fsd.blocksz = dev0_blocksize;
+  }
+  else {
+    printf("Unsupported device\n");
+    return SYSERR;
+  }
+
+ i = fsd.nblocks;
+ while ( (i % 8) != 0) {i++;}
+ fsd.freemaskbytes = i / 8; 
+
+ if ((fsd.freemask = memget(fsd.freemaskbytes)) == SYSERR) {
+   printf("mkfs memget failed.\n");
+   return SYSERR;
+ }
+
+ /* zero the free mask */
+ for(i=0;i<fsd.freemaskbytes;i++) {
+   fsd.freemask[i] = '\0';
+ }
+
+ /* write the fsystem block to block 0, mark block used */
+ setmaskbit(0);
+ bwrite(dev0, bm_blk, 0, &fsd, sizeof(struct fsystem));
+
+ /* write the freemask in block 0, mark block used */
+ setmaskbit(1);
+ bwrite(dev0, bm_blk, 1, fsd.freemask, fsd.freemaskbytes);
+ 
+ /* write inodes to memory */
+ fsd.ninodes = DIRECTORY_SIZE;
+ int inodesPerBlock = fsd.blocksz/sizeof(struct inode);
+ int bks = fsd.ninodes / inodesPerBlock;
+ for(i = 2;i<=bks+1;i++) {
+	int j;
+	for(j = 0;j<inodesPerBlock;j++) {
+		struct inode samp;
+		samp.id = (i-2)*inodesPerBlock + j;
+		samp.type = -1;
+		samp.nlink = 0;
+		samp.device = 0;
+		samp.size = INODEBLOCKS*MDEV_BLOCK_SIZE;
+		bwrite(dev0, i, j*sizeof(struct inode), &samp , sizeof(struct inode));
+	}
+	setmaskbit(i);
+	
+
+ }
+  
+ //By default set directory entry inode_num to -1 when note in use
+ for(i = 0;i<DIRECTORY_SIZE;i++) {
+	fsd.root_dir.entry[i].inode_num = -1;
+ }
+ 
+ //By default set oft to -1
+ for(i=0;i<2*DIRECTORY_SIZE;i++) {
+	oft[i].state=-1;
+ }
+ 
+ return 1;
+}
+
+
+
+/* specify the block number to be set in the mask */
+int setmaskbit(int b) {
+  int mbyte, mbit;
+  mbyte = b / 8;
+  mbit = b % 8;
+
+  fsd.freemask[mbyte] |= (0x80 >> mbit);
+  return 0;
+}
+
+/* specify the block number to be read in the mask */
+int getmaskbit(int b) {
+  int mbyte, mbit;
+  mbyte = b / 8;
+  mbit = b % 8;
+
+  return( ( (fsd.freemask[mbyte] << mbit) & 0x80 ) >> 7);
+}
+
+/* specify the block number to be unset in the mask */
+int clearmaskbit(int b) {
+  int mbyte, mbit, invb;
+  mbyte = b / 8;
+  mbit = b % 8;
+
+  invb = ~(0x80 >> mbit);
+  invb &= 0xFF;
+
+  fsd.freemask[mbyte] &= invb;
+  return 0;
+}
+
+/* This is maybe a little overcomplicated since the first block is indicated in the
+   high-order bit.  Shift the byte by j positions to make the match in bit7 (the 8th 
+   bit) and then shift that value 7 times to the low-order bit to print.  Yes, it
+   could be the other way...  */
+void printfreemask(void) {
+  int i,j;
+
+  for (i=0; i < fsd.freemaskbytes; i++) {
+    for (j=0; j < 8; j++) {
+      printf("%d", ((fsd.freemask[i] << j) & 0x80) >> 7);
+    }
+    if ( (i % 8) == 7) {
+      printf("\n");
+    }
+  }
+  printf("\n");
+}
+
+
+int get_fd() {
+	int i;
+	for(i = 0;i<DIRECTORY_SIZE*2;i++) {
+		if(oft[i].state == -1) {
+			return i;
+		}
+	}
+	printf("No File Descriptor Free\n");
+	return -1;
+}
+
+
+
+
+// Flags handled: Flag is 1 (WILL APPEND TO FILE)
+int fopen(char *filename, int flags) {
+	int i;
+	int curInode_num =-1;
+	for(i=0;i<DIRECTORY_SIZE;i++){
+		if(match(filename,fsd.root_dir.entry[i].name)) {
+			curInode_num = fsd.root_dir.entry[i].inode_num;
+			break; 
+		}
+	}
+	
+	if(curInode_num == -1) {
+		printf("File %s does not exist",filename);
+		return -1;
+	}
+	
+	struct inode newn;
+	
+	get_inode_by_num(0, curInode_num, &newn);
+	
+	
+	// Allocates file descriptor
+	int fd = get_fd();
+	if(fd == -1)
+		return SYSERR;
+		
+	oft[fd].in = newn;
+	oft[fd].state=1;
+	oft[fd].fileptr=0;
+	
+	oft[fd].in.nlink++;
+	if(flags==1) {
+		oft[fd].fileptr=oft[fd].in.size;
+	}
+	
+	// Update inode
+	put_inode_by_num(0,curInode_num,&oft[fd].in);
+//	printf("Successfully opened file\n");
+	return fd;
+	
+}
+
+// Creates a file and returns the file descriptor
+int fcreate(char *fname,int mode) {
+	if (mode == O_CREAT){
+	int i;
+	int opendirent = -1;
+	for(i=0;i<DIRECTORY_SIZE;i++){
+		if(match(fname,fsd.root_dir.entry[i].name) ) {
+			printf("A file already exists with this name. Please choose a different name");
+			return -1;
+		}
+		if(fsd.root_dir.entry[i].inode_num == -1)
+			opendirent = i;
+	}
+	if(opendirent == -1) {
+		printf("No more files available\n");
+		return -1;
+	}	
+	
+	
+	
+	 
+	int inod = alloc_inode();
+	struct inode fNode;
+	get_inode_by_num(0,inod,&fNode);
+	fNode.nlink=0;
+	fNode.size=0;
+	fNode.type=1;
+	
+	fsd.root_dir.numentries++;
+
+	copy(fsd.root_dir.entry[opendirent].name,fname);
+	fsd.root_dir.entry[opendirent].inode_num = fNode.id;
+	
+	
+	put_inode_by_num(0,fNode.id,&fNode);
+	
+	return OK;
+	}
+}
+
+
+int fdelete(char *fname){ 
+	int curInode_num=-1;
+	int dirEntry;
+	int i;
+	for(i=0;i<DIRECTORY_SIZE;i++){
+	//check if file exists 
+		if(match(fname,fsd.root_dir.entry[i].name)) {
+			dirEntry = i;
+			curInode_num = fsd.root_dir.entry[i].inode_num; 
+			break; 
+		}
+	} 
+	if( curInode_num == -1){ 
+		//if file not exists 
+		printf("File %s does not exist\n"); 
+		return -1; 
+	} 
+	struct inode node_del; 
+	get_inode_by_num(0, curInode_num, &node_del); 
+	if(node_del.nlink == 0){ 
+		int j;
+		int nodesToClear = node_del.size / fsd.blocksz;
+		if(node_del.size % fsd.blocksz != 0)
+			nodesToClear++;
+			
+		for(j=0;j<nodesToClear;j++) {
+//			printf("Clearing block %d\n",node_del.blocks[j]);
+			clearmaskbit(node_del.blocks[j]);
+		}
+		//check if file closed 
+		node_del.type = -1; 
+		//type -1 indicates free, 1 indicates used //TODO: Delete this filename from directory entries 
+		put_inode_by_num(0,curInode_num, &node_del);
+		fsd.root_dir.entry[dirEntry].inode_num=-1;
+		fsd.root_dir.entry[dirEntry].name[0]='\0';
+	} 
+	else {
+		printf("Cannot close file as it is still opened\n");
+	}
+	return 0;
+}
+
+int fclose(int fd) {
+	if(oft[fd].state == -1) {
+		printf("Bad file descriptor\n");
+	}
+	//Update inode and save to memory
+	struct inode update;
+	get_inode_by_num(0,oft[fd].in.id,&update);
+	update.nlink--;
+	put_inode_by_num(0,oft[fd].in.id,&update);
+	
+
+	oft[fd].state = -1;
+	oft[fd].fileptr=0;
+	
+	return 0;
+}
+
+int fread(int fd, void *buf, int nbytes) {
+	get_inode_by_num(0,oft[fd].in.id,&oft[fd].in);
+	if(oft[fd].in.size < nbytes + oft[fd].fileptr) {
+		printf("Terminate reading because you want to read past end of file");
+		return -1;
+	}
+	char* buff = buf;
+	buff[0]='\0';
+	int bytesread = 0;
+	while(bytesread < nbytes) {
+		int curBlock = oft[fd].fileptr/fsd.blocksz;
+	// Check here to see if out of bounds
+		int bytesOnCurBlock = fsd.blocksz - (oft[fd].fileptr%fsd.blocksz);
+		
+		if(bytesOnCurBlock < nbytes - bytesread) {
+			char r[fsd.blocksz];
+			int btor = fsd.blocksz - oft[fd].fileptr%fsd.blocksz;
+			bread(0,oft[fd].in.blocks[curBlock], oft[fd].fileptr%fsd.blocksz,&r,btor);
+			oft[fd].fileptr += btor;
+			cat(buf,r,btor);
+			bytesread += btor;
+		}
+		// Only need to read on current block
+		else {
+			char r[fsd.blocksz];
+			bread(0,oft[fd].in.blocks[curBlock],oft[fd].fileptr%fsd.blocksz,&r,nbytes - bytesread);
+			oft[fd].fileptr += nbytes - bytesread;
+			cat(buf,r,nbytes-bytesread);
+			bytesread += nbytes - bytesread;
+		
+		}	
+	}
+	put_inode_by_num(0,oft[fd].in.id,&oft[fd].in);
+	return OK;
+}
+
+int fwrite(int fd, void *buf, int nbytes) {
+	get_inode_by_num(0,oft[fd].in.id,&oft[fd].in);
+	int block_num=(oft[fd].fileptr+nbytes)/fsd.blocksz+1;
+	int cur_block_num = oft[fd].in.size/fsd.blocksz;
+	if(oft[fd].in.size%fsd.blocksz != 0)
+		cur_block_num++;
+
+	int alloc_num;
+	int i;
+	if((alloc_num = block_num - cur_block_num) > 0){
+		for(i = 0; i < alloc_num; i++){
+			if(alloc_block(fd, cur_block_num) != -1)
+				cur_block_num++;
+			else {
+				printf("cannot allocate block");
+				put_inode_by_num(0,oft[fd].in.id,&oft[fd].in);
+				return -1;
+			}
+		}
+	}
+	
+    
+	int byteswrite = 0;
+	while(byteswrite < nbytes) {
+		int curBlock = oft[fd].fileptr/fsd.blocksz;
+		int offset = oft[fd].fileptr % fsd.blocksz;
+	// Check here to see if out of bounds
+		int bytesOnCurBlock = fsd.blocksz - (oft[fd].fileptr%fsd.blocksz);
+		
+		if(bytesOnCurBlock < nbytes - byteswrite) {
+			char* buff = ((char*) buf);
+			bwrite(0,oft[fd].in.blocks[curBlock],offset ,&buff[byteswrite],bytesOnCurBlock);
+			oft[fd].fileptr += bytesOnCurBlock;
+			byteswrite += bytesOnCurBlock;
+			if(oft[fd].fileptr > oft[fd].in.size) {
+				oft[fd].in.size = oft[fd].fileptr;
+				//TODO INODE on "DISK" IS NOT LONGER VALID
+			}
+		}
+		// Only need to read on current block
+		else {
+			char* buff = ((char*) buf);
+			bwrite(0,oft[fd].in.blocks[curBlock],offset, &buff[byteswrite],nbytes - byteswrite);
+			oft[fd].fileptr += nbytes - byteswrite;
+			byteswrite += nbytes - byteswrite;
+			if(oft[fd].fileptr > oft[fd].in.size) {
+				oft[fd].in.size = oft[fd].fileptr;
+			}
+		
+		}	
+	}
+	put_inode_by_num(0,oft[fd].in.id,&oft[fd].in);
+	return OK;
+}
+
+int fseek(int fd, int offset) {
+// TODO check to see if seeking runs past the end of the file
+	int nptr = oft[fd].fileptr + offset;
+	if(nptr> oft[fd].in.size) {
+		printf("Fileptr moved past the end of the current file size\n");
+		return -1;
+	}
+	if(nptr/fsd.blocksz > INODEBLOCKS) {
+		printf("Fileptr moved to out of bounds\n");
+	}
+	else
+		oft[fd].fileptr = nptr;
+	
+	return 0;
+}
+
+int alloc_block(int fd, int num){
+	int i;
+	for(i = 0; i < fsd.nblocks; i++){
+		if(getmaskbit(i) == 0){
+			oft[fd].in.blocks[num] = i;
+//			printf("Found Open Block:%d %d",i,num);
+			setmaskbit(i);
+			return 0;
+		} 
+	} 
+	return -1; 
+}
+
+int alloc_inode() {
+	int i;
+	for(i = 0;i<fsd.ninodes;i++) {
+		struct inode free;
+		get_inode_by_num(0,i,&free);
+		if(free.type == -1) {
+			return free.id;
+			break;
+		}
+	}
+	return -1;
+}
+
+int get_inode_by_num(int dev, int inode_number, struct inode *in) {
+	if(inode_number >= fsd.ninodes || inode_number < 0)
+		return SYSERR;
+	bread(dev, inode_number / (fsd.blocksz/sizeof(struct inode)) + 2, inode_number % (fsd.blocksz/sizeof(struct inode)) * sizeof(struct inode), in, sizeof(struct inode));
+	return OK;
+}
+
+int put_inode_by_num(int dev, int inode_number, struct inode *in) {
+	if(inode_number >= fsd.ninodes || inode_number < 0)
+		return SYSERR;
+	bwrite(dev, inode_number / (fsd.blocksz/sizeof(struct inode)) + 2, inode_number % (fsd.blocksz/sizeof(struct inode)) * sizeof(struct inode), in, sizeof(struct inode));
+	return OK;
+}
+
+int match(char* a, char* b) {
+	int index = 0;
+	while(a[index] == b[index] && a[index] != '\0' && b[index] != '\0') {
+		index++;
+	}
+	if(a[index] == '\0' && b[index] == '\0') {
+		return 1;
+	}
+	return 0;
+}
+
+int copy(char*a,char* b) {
+	int i = 0;
+	while(b[i]!='\0' && i<FILENAMELEN-1) {
+		a[i]=b[i];
+		i++;
+	}
+	a[i]='\0';
+	return 0;
+}
+
+int cat(char*a,char*b,int length) {
+	int len = 0;
+	while(a[len]!='\0')
+		len++;
+		
+	int i = 0;
+	while(i<length) {
+		a[len++]=b[i++];
+	}
+	a[len]='\0';
+	return 0;
+}
+
+
+
+#endif /* FS */

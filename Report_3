@@ -1,0 +1,32 @@
+/**
+* @Report for HW #3
+* @Author: Lei Wang(wang558) && Sisong Yang(yangsis)
+*
+*/
+
+----------------------ANSWER PART-------------------------------
+
+Question_1: How exactly is sychronization achieved using semaphore in our assignnment?
+
+Answer to #1:
+
+First, a semaphore is kind of an integer which is initialized when the semaphore itself is created, while the system call 'wait' decrements a semaphore and if the result is negative, then the calling process will be put into the waiting process list.  On the contrast, the system call 'signal' increments a semaphore, and if the result is negative, the calling process will be put into the waiting process. 
+
+The producer program first use the command 'wait(consumed)' to check if the critical section of the consumer program is working or not, and if not, the producer program itself will enter its own critical section, after which it will use the 'signal(produced)' to broadcast that now the producer program itself is done and vice versa.
+
+
+Question_2: Can the above sychronization be achieved with just one semphaore? Why or why not?
+
+Answer to #2:
+
+No. Because both producer and consumer processes need to know the other process is currently entering into its critical section or not. So that means both processes need its own semaphore to indicate its current status, i.e., whether it has entered critical section or not.
+
+
+
+------------------FUNCTIONS PART-------------------------------
+consumer by Sisong
+prodcons.h by Sisong
+producer by Lei
+number_only by Lei
+xsh_prodcons  by Lei
+
